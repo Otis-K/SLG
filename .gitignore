@@ -1,0 +1,13 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+web-build/
+expo-env.d.ts
+*.log
+
+# Expo generated native projects
+/mobile/android/
+/mobile/ios/
+/mobile/.expo/

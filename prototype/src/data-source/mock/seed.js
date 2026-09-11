@@ -1,0 +1,104 @@
+export const MOCK_BOOTSTRAP_RESPONSE = {
+  schemaVersion: 'app-bootstrap-v1',
+  source: 'mock',
+  fixtureVersion: '2026.08.12',
+  data: {
+    profile: {
+      userId: 'demo-user-01',
+      displayName: '罗志恺',
+      avatarText: '罗',
+      goalLabel: '减脂',
+      units: 'metric',
+      latestWeightKg: 72.4,
+    },
+    nutritionPlan: {
+      planVersionId: 'nutrition-plan-demo-01',
+      status: 'active',
+      effectiveFromLocalDate: '2026-08-01',
+      targets: { calories: 1800, protein: 120, carbs: 210, fat: 60 },
+      mealBudgets: [
+        { id: 'breakfast', label: '早餐', ratio: '25%' },
+        { id: 'lunch', label: '午餐', ratio: '35%' },
+        { id: 'dinner', label: '晚餐', ratio: '30%' },
+        { id: 'snack', label: '加餐', ratio: '10%' },
+      ],
+    },
+    foodCatalog: [
+      { id: 'egg', name: '水煮鸡蛋', detail: '2 个 · 沿用上次份量', unit: '个', amount: 2, calories: 144, protein: 12.6, carbs: 1.1, fat: 9.5, tone: 'yellow', favorite: true },
+      { id: 'oats', name: '即食燕麦片', detail: '桂格 · 40 克', unit: '克', amount: 40, calories: 150, protein: 5.2, carbs: 27.1, fat: 2.7, tone: 'coral', favorite: true },
+      { id: 'milk', name: '低脂牛奶', detail: '蒙牛 · 250 毫升', unit: '毫升', amount: 250, calories: 120, protein: 8.3, carbs: 12.5, fat: 3.8, tone: 'blue', favorite: false },
+      { id: 'rice', name: '熟米饭', detail: '1 碗 · 150 克', unit: '碗', amount: 1, calories: 174, protein: 3.9, carbs: 38.4, fat: 0.5, tone: 'green', favorite: true },
+      { id: 'chicken', name: '香煎鸡胸肉', detail: '家常做法 · 120 克', unit: '克', amount: 120, calories: 198, protein: 36.5, carbs: 1.8, fat: 4.9, tone: 'orange', favorite: false },
+      { id: 'banana', name: '香蕉', detail: '1 根 · 约 110 克', unit: '根', amount: 1, calories: 102, protein: 1.2, carbs: 26.4, fat: 0.3, tone: 'yellow', favorite: false },
+    ],
+    meals: {
+      breakfast: [
+        { id: 'egg', entryId: 'breakfast-egg', name: '水煮鸡蛋', detail: '2 个 · 沿用上次份量', unit: '个', amount: 2, calories: 144, protein: 12.6, carbs: 1.1, fat: 9.5, tone: 'yellow' },
+        { id: 'milk', entryId: 'breakfast-milk', name: '低脂牛奶', detail: '蒙牛 · 250 毫升', unit: '毫升', amount: 250, calories: 120, protein: 8.3, carbs: 12.5, fat: 3.8, tone: 'blue' },
+      ],
+      lunch: [
+        { id: 'rice', entryId: 'lunch-rice', name: '熟米饭', detail: '1 碗 · 150 克', unit: '碗', amount: 1, calories: 174, protein: 3.9, carbs: 38.4, fat: 0.5, tone: 'green' },
+      ],
+      dinner: [],
+      snack: [
+        { id: 'banana', entryId: 'snack-banana', name: '香蕉', detail: '1 根 · 约 110 克', unit: '根', amount: 1, calories: 102, protein: 1.2, carbs: 26.4, fat: 0.3, tone: 'yellow' },
+      ],
+    },
+    workout: {
+      sessionId: 'workout-session-demo-01',
+      title: '上肢 A',
+      active: false,
+      completed: false,
+      exercises: [
+        { id: 'bench', name: '杠铃卧推', note: '目标 4 组 · 8 次', sets: [{ id: 'bench-1', weight: 45, reps: 8, done: true }, { id: 'bench-2', weight: 45, reps: 8, done: true }, { id: 'bench-3', weight: 45, reps: 8, done: false }, { id: 'bench-4', weight: 45, reps: 8, done: false }] },
+        { id: 'row', name: '坐姿划船', note: '目标 3 组 · 10 次', sets: [{ id: 'row-1', weight: 40, reps: 10, done: false }, { id: 'row-2', weight: 40, reps: 10, done: false }, { id: 'row-3', weight: 40, reps: 10, done: false }] },
+        { id: 'press', name: '哑铃肩推', note: '目标 3 组 · 10 次', sets: [{ id: 'press-1', weight: 12, reps: 10, done: false }, { id: 'press-2', weight: 12, reps: 10, done: false }, { id: 'press-3', weight: 12, reps: 10, done: false }] },
+      ],
+    },
+    trainingPlan: {
+      planVersionId: 'training-plan-demo-01',
+      status: 'active',
+      daysPerWeek: 4,
+      title: '上/下肢四练',
+      sessionMinutes: 50,
+      place: '健身房',
+      sessions: ['上肢 A', '下肢 A', '上肢 B', '下肢 B'],
+    },
+    trainingTemplates: [
+      { id: 'upper-a', name: '上肢 A', detail: '卧推、划船、肩推 · 10 组' },
+      { id: 'lower-a', name: '下肢 A', detail: '深蹲、硬拉、箭步蹲 · 11 组' },
+      { id: 'upper-b', name: '上肢 B', detail: '上斜推、下拉、侧平举 · 12 组' },
+    ],
+    trainingTemplateOptions: ['全身 A', '全身 B', '全身 C', '上肢 A', '下肢 A', '上肢 B', '下肢 B', '推', '拉', '腿', '上肢', '下肢', '轻有氧'],
+    trends: {
+      periodLabel: '8月4日–8月10日',
+      dietAverageKcal: 1537,
+      validDietDays: 6,
+      diet: [{ day: '一', value: 1520 }, { day: '二', value: 1760 }, { day: '三', value: 1685 }, { day: '四', value: null }, { day: '五', value: 1910 }, { day: '六', value: 1740 }, { day: '日', value: 466 }],
+      training: { completedSessions: 2, durationMinutes: 86, completedSets: 21 },
+      weight: { latestKg: 72.4, deltaKg: -0.3 },
+    },
+    consents: {
+      healthProfileProcessing: true,
+      cloudBackup: true,
+    },
+    backup: {
+      state: 'synced',
+      lastSuccessfulLabel: '今天 09:36',
+    },
+  },
+};
+
+export const MOCK_PLAN_POLICY = {
+  policyVersion: 'prototype-demo-2026.08.12',
+  activityFactors: { sedentary: 1.2, light: 1.375, moderate: 1.55, high: 1.725 },
+  goalFactors: { lose: 0.85, maintain: 1, gain: 1.1 },
+  minimumCalories: { male: 1500, female: 1200 },
+  maximumCalories: 3200,
+  proteinPerKg: { activeGoal: 1.6, maintain: 1.4 },
+  fatPerKg: 0.8,
+  minimumCarbs: 80,
+  weeklyChangeKg: { gentle: 0.25, steady: 0.5 },
+  mealBudgets: [{ id: 'breakfast', label: '早餐', ratio: 0.25 }, { id: 'lunch', label: '午餐', ratio: 0.35 }, { id: 'dinner', label: '晚餐', ratio: 0.3 }, { id: 'snack', label: '加餐', ratio: 0.1 }],
+  sessionPatterns: { 2: ['全身 A', '全身 B'], 3: ['全身 A', '全身 B', '全身 C'], 4: ['上肢 A', '下肢 A', '上肢 B', '下肢 B'], 5: ['推', '拉', '腿', '上肢', '下肢'] },
+};
