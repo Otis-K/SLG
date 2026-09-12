@@ -1,8 +1,9 @@
 import { DataSourceError } from '../contracts.js';
 
-export function createHttpClient({ baseUrl, fetchImpl = globalThis.fetch, timeoutMs = 10000 }) {
+export function createHttpClient({ baseUrl, fetchImpl = globalThis.fetch, timeoutMs = 10000, getAccessToken = () => null }) {
   if (typeof fetchImpl !== 'function') throw new DataSourceError('当前环境不支持 fetch', { code: 'FETCH_UNAVAILABLE' });
   const normalizedBaseUrl = String(baseUrl || '/api/v1').replace(/\/$/, '');
+  const accessToken = getAccessToken();
 
   return async function request(path, { method = 'GET', body, signal } = {}) {
     const controller = new AbortController();
@@ -16,13 +17,18 @@ export function createHttpClient({ baseUrl, fetchImpl = globalThis.fetch, timeou
         headers: {
           Accept: 'application/json',
           ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
       if (!response.ok) {
-        throw new DataSourceError(`后端请求失败（HTTP ${response.status}）`, {
-          code: 'HTTP_ERROR',
+        let payload = null;
+        try { payload = await response.json(); } catch { payload = null; }
+        const errorCode = payload?.error?.code || 'HTTP_ERROR';
+        const message = payload?.error?.message || `后端请求失败（HTTP ${response.status}）`;
+        throw new DataSourceError(message, {
+          code: errorCode,
           status: response.status,
           retryable: response.status >= 500 || response.status === 429,
         });

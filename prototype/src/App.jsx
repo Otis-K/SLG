@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowLeft,
   BarChart3,
+  Camera,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -19,6 +20,7 @@ import {
   Download,
   Dumbbell,
   FileArchive,
+  FileImage,
   Grid2X2,
   HelpCircle,
   Home,
@@ -36,6 +38,7 @@ import {
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   Star,
   Target,
   Trash2,
@@ -238,10 +241,138 @@ function App() {
 }
 
 function MobileApp(props) {
-  const appData = useAppData();
+  const [authReady, setAuthReady] = useState(() => Boolean(appDataSource.getAccessToken?.()));
+  const appData = useAppData({ enabled: authReady });
+  if (!authReady) {
+    return <AuthScreen dataSource={appDataSource} onLoggedIn={() => setAuthReady(true)} />;
+  }
   if (appData.status === 'loading') return <AppDataLoading sourceLabel={appData.dataSource.label} />;
   if (appData.status === 'error') return <AppDataError error={appData.error} onRetry={appData.reload} sourceLabel={appData.dataSource.label} />;
   return <LoadedMobileApp {...props} bootstrap={appData.data} dataSource={appData.dataSource} />;
+}
+
+function AuthScreen({ dataSource, onLoggedIn }) {
+  const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
+  const [status, setStatus] = useState('idle');
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const [countdown, setCountdown] = useState(0);
+
+  useEffect(() => {
+    if (countdown <= 0) return undefined;
+    const timer = setTimeout(() => setCountdown((value) => value - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [countdown]);
+
+  async function handleSendCode() {
+    setError('');
+    setNotice('');
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+      setError('请输入正确的 11 位大陆手机号');
+      return;
+    }
+    setStatus('sending');
+    try {
+      const result = await dataSource.requestSmsCode(phone);
+      setStatus('sent');
+      setCountdown(60);
+      setNotice(result.debug ? `开发模式验证码：${result.debugCode}` : '验证码已发送，请留意短信');
+    } catch (requestError) {
+      setStatus('idle');
+      setError(requestError?.message || '验证码发送失败，请稍后重试');
+    }
+  }
+
+  async function handleLogin() {
+    setError('');
+    setNotice('');
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+      setError('请输入正确的 11 位大陆手机号');
+      return;
+    }
+    if (!code.trim()) {
+      setError('请输入验证码');
+      return;
+    }
+    setStatus('verifying');
+    try {
+      const result = await dataSource.loginWithCode(phone, code.trim());
+      if (!result.accessToken) throw new Error('登录成功，但未拿到访问令牌');
+      onLoggedIn();
+    } catch (requestError) {
+      setStatus('sent');
+      setError(requestError?.message || '登录失败，请检查验证码');
+    }
+  }
+
+  return (
+    <div className="mobile-app auth-screen">
+      <div className="mobile-status" aria-hidden="true"><span>09:41</span><span>5G&nbsp;&nbsp;92%</span></div>
+      <section className="auth-panel">
+        <div className="app-logo auth-logo">
+          <span className="logo-mark"><Grid2X2 size={22} strokeWidth={2.4} /></span>
+          <span>食练格</span>
+        </div>
+        <h1>手机号登录 / 注册</h1>
+        <p className="auth-subtitle">首次登录后，我们会引导你完成基础档案与饮食训练计划。</p>
+
+        <label className="auth-field">
+          <span>手机号</span>
+          <input
+            autoComplete="tel"
+            inputMode="numeric"
+            maxLength={11}
+            value={phone}
+            onChange={(event) => setPhone(event.target.value.replace(/\D/g, '').slice(0, 11))}
+            placeholder="请输入 11 位手机号"
+          />
+        </label>
+
+        <label className="auth-field">
+          <span>验证码</span>
+          <div className="auth-code-row">
+            <input
+              autoComplete="one-time-code"
+              inputMode="numeric"
+              maxLength={6}
+              value={code}
+              onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="6 位验证码"
+            />
+            <button
+              className="text-button"
+              onClick={handleSendCode}
+              disabled={status === 'sending' || countdown > 0}
+            >
+              {status === 'sending' ? <LoaderCircle className="spin" size={16} /> : countdown > 0 ? `${countdown}s 后重发` : '获取验证码'}
+            </button>
+          </div>
+        </label>
+
+        {notice ? <div className="auth-notice"><Check size={15} />{notice}</div> : null}
+        {error ? <div className="auth-error"><X size={15} />{error}</div> : null}
+
+        <button className="primary-button auth-submit" onClick={handleLogin} disabled={status === 'sending' || status === 'verifying'}>
+          {status === 'verifying' ? <LoaderCircle className="spin" size={18} /> : <ShieldCheck size={18} />}
+          {status === 'verifying' ? '正在登录…' : '登录 / 注册'}
+        </button>
+
+        <div className="auth-divider"><span>其他方式</span></div>
+        <div className="auth-social-list">
+          <button disabled title="需要 QQ 开放平台资质与备案后再接入">
+            <span className="auth-social-dot">Q</span>
+            QQ
+          </button>
+          <button disabled title="需要微信开放平台资质与备案后再接入">
+            <span className="auth-social-dot auth-social-dot--wx">W</span>
+            微信
+          </button>
+        </div>
+        <p className="auth-legal">继续即表示你同意《用户服务协议》和《隐私政策》。健康建议不能替代诊疗。</p>
+      </section>
+    </div>
+  );
 }
 
 function AppDataLoading({ sourceLabel }) {
@@ -272,7 +403,7 @@ function AppDataError({ error, onRetry, sourceLabel }) {
 }
 
 function LoadedMobileApp({ requestedView, onViewChange, bootstrap, dataSource }) {
-  const [view, setView] = useState(requestedView || 'home');
+  const [view, setView] = useState(() => (bootstrap.profile.onboardingCompleted === false ? 'onboarding' : requestedView || 'home'));
   const [targets, setTargets] = useState(() => bootstrap.nutritionPlan.targets);
   const [mealBudgets, setMealBudgets] = useState(() => bootstrap.nutritionPlan.mealBudgets || []);
   const [meals, setMeals] = useState(() => bootstrap.meals);
@@ -552,6 +683,7 @@ function LoadedMobileApp({ requestedView, onViewChange, bootstrap, dataSource })
           setCustomFoods={setCustomFoods}
           favorites={favorites}
           toggleFavorite={toggleFavorite}
+          dataSource={dataSource}
         />
       ) : null}
 
@@ -903,13 +1035,23 @@ function FoodSheet({
   setCustomFoods,
   favorites,
   toggleFavorite,
+  dataSource,
 }) {
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState('recent');
   const [amount, setAmount] = useState(selectedFood?.amount || 1);
   const [unit, setUnit] = useState(selectedFood?.unit || '份');
   const [customForm, setCustomForm] = useState({ name: '', amount: 100, unit: '克', calories: 0, protein: 0, carbs: 0, fat: 0 });
+  const [remoteFoods, setRemoteFoods] = useState(foodCatalog);
+  const [searchStatus, setSearchStatus] = useState('idle');
+  const [pagination, setPagination] = useState(null);
+  const [aiText, setAiText] = useState('');
+  const [aiImage, setAiImage] = useState(null);
+  const [aiResult, setAiResult] = useState(null);
+  const [aiStatus, setAiStatus] = useState('idle');
+  const [aiError, setAiError] = useState('');
   const searchRef = useRef(null);
+  const fileRef = useRef(null);
 
   useEffect(() => {
     if (stage === 'browse') setTimeout(() => searchRef.current?.focus(), 80);
@@ -923,6 +1065,29 @@ function FoodSheet({
   }, [selectedFood]);
 
   useEffect(() => {
+    if (stage !== 'browse') return undefined;
+    let cancelled = false;
+    setSearchStatus('loading');
+    const future = dataSource?.searchFoods
+      ? dataSource.searchFoods({ q: query, page: 1, pageSize: 60 })
+      : Promise.resolve({ data: [...foodCatalog, ...customFoods], pagination: null });
+    future
+      .then((result) => {
+        if (cancelled) return;
+        setRemoteFoods(result?.data || []);
+        setPagination(result?.pagination || null);
+        setSearchStatus('success');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setRemoteFoods([]);
+        setPagination(null);
+        setSearchStatus('error');
+      });
+    return () => { cancelled = true; };
+  }, [stage, query, dataSource, foodCatalog, customFoods]);
+
+  useEffect(() => {
     const closeOnEscape = (event) => {
       if (event.key === 'Escape') onClose();
     };
@@ -930,8 +1095,7 @@ function FoodSheet({
     return () => document.removeEventListener('keydown', closeOnEscape);
   }, [onClose]);
 
-  const allFoods = [...foodCatalog, ...customFoods];
-  const visibleFoods = allFoods.filter((food) => {
+  const visibleFoods = remoteFoods.filter((food) => {
     if (tab === 'favorites' && !favorites.has(food.id)) return false;
     return food.name.toLowerCase().includes(query.trim().toLowerCase());
   });
@@ -972,6 +1136,36 @@ function FoodSheet({
     onQuickAdd(food);
   };
 
+  async function runAiEstimate() {
+    if (!aiText.trim() && !aiImage) {
+      setAiError('请输入食物描述或上传餐食照片');
+      return;
+    }
+    setAiStatus('loading');
+    setAiError('');
+    setAiResult(null);
+    try {
+      const result = await dataSource.estimateMeal({
+        text: aiText.trim(),
+        imageBase64: aiImage,
+      });
+      setAiResult(result);
+      setAiStatus('success');
+    } catch (error) {
+      setAiError(error?.message || 'AI 识别失败，请重试');
+      setAiStatus('error');
+    }
+  }
+
+  function handleImageFile(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setAiImage(String(reader.result || '').replace(/^data:image\/[a-zA-Z]+;base64,/, ''));
+    reader.onerror = () => setAiError('图片读取失败，请重新选择');
+    reader.readAsDataURL(file);
+  }
+
   return (
     <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="bottom-sheet food-sheet" role="dialog" aria-modal="true" aria-label="记录饮食">
@@ -980,7 +1174,7 @@ function FoodSheet({
           {stage !== 'browse' ? (
             <IconButton label="返回食物列表" onClick={() => setStage('browse')}><ArrowLeft size={20} /></IconButton>
           ) : <span className="header-spacer" />}
-          <div><h2>{stage === 'browse' ? '记录饮食' : stage === 'portion' ? '确认份量' : '创建私人食物'}</h2><p>{MEAL_META[mealTarget].label}</p></div>
+          <div><h2>{stage === 'browse' ? '记录饮食' : stage === 'portion' ? '确认份量' : stage === 'ai' ? 'AI 食物识别' : '创建私人食物'}</h2><p>{MEAL_META[mealTarget].label}</p></div>
           <IconButton label="关闭" onClick={onClose}><X size={20} /></IconButton>
         </header>
 
@@ -1000,11 +1194,19 @@ function FoodSheet({
               <button role="tab" aria-selected={tab === 'recent'} className={tab === 'recent' ? 'is-active' : ''} onClick={() => setTab('recent')}>最近</button>
               <button role="tab" aria-selected={tab === 'favorites'} className={tab === 'favorites' ? 'is-active' : ''} onClick={() => setTab('favorites')}>收藏</button>
             </div>
+            <button className="secondary-button ai-entry-button" onClick={() => setStage('ai')}>
+              <Sparkles size={17} />
+              文字 / 拍照识别食物
+            </button>
+            {searchStatus === 'loading' ? <div className="inline-status"><LoaderCircle className="spin" size={15} />正在搜索食物库…</div> : null}
+            {searchStatus === 'error' ? <div className="warning-note"><WifiOff size={16} />搜索失败，请重试或创建私人食物。</div> : null}
             <div className="food-results">
               {visibleFoods.length ? visibleFoods.map((food) => (
                 <div className="food-result" key={food.id}>
                   <button className="food-result-main" onClick={() => openPortion(food)}>
-                    <span className={`food-swatch food-swatch--${food.tone}`}>{food.name.slice(0, 1)}</span>
+                    <span className={`food-swatch food-swatch--${food.tone}`}>
+                      {food.imageUrl ? <img src={food.imageUrl} alt="" /> : <span>{food.imageEmoji || food.name.slice(0, 1)}</span>}
+                    </span>
                     <span><strong>{food.name}</strong><small>{food.detail}</small></span>
                     <span>{Math.round(food.calories)}<small> kcal</small></span>
                   </button>
@@ -1024,7 +1226,67 @@ function FoodSheet({
                 </div>
               )}
             </div>
+            {pagination ? <div className="food-pagination">共 {pagination.total} 项 · 第 {pagination.page}/{pagination.totalPages} 页</div> : null}
             {visibleFoods.length ? <button className="sheet-footer-action" onClick={() => setStage('custom')}><Plus size={17} />创建私人食物</button> : null}
+          </div>
+        ) : null}
+
+        {stage === 'ai' ? (
+          <div className="sheet-content ai-panel">
+            <div className="ai-intro">
+              <Sparkles size={20} />
+              <div><strong>AI 食物识别</strong><small>找不到时可以描述食物，或上传餐食照片。</small></div>
+            </div>
+            <button className="secondary-button ai-photo-button" onClick={() => fileRef.current?.click()}>
+              <Camera size={18} />
+              {aiImage ? '已选择照片，点击重新选择' : '选择餐食照片'}
+            </button>
+            <input ref={fileRef} type="file" accept="image/*" hidden onChange={handleImageFile} />
+            <label className="ai-text-field">
+              <span>文字描述</span>
+              <textarea
+                value={aiText}
+                onChange={(event) => setAiText(event.target.value)}
+                placeholder="例如：半碗米饭、一个水煮鸡蛋和一份清炒西兰花"
+              />
+            </label>
+            <button className="primary-button ai-estimate-button" disabled={aiStatus === 'loading'} onClick={runAiEstimate}>
+              {aiStatus === 'loading' ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />}
+              {aiStatus === 'loading' ? '正在分析…' : '估算这顿饭的热量'}
+            </button>
+            {aiError ? <div className="warning-note warning-note--danger"><Info size={16} />{aiError}</div> : null}
+            {aiResult ? (
+              <div className="ai-result">
+                <div className="ai-result-summary">
+                  <span>AI 估算总计</span>
+                  <strong>{aiResult.summary.calories} kcal</strong>
+                </div>
+                <div className="ai-result-macros">
+                  <span>蛋白质 {aiResult.summary.protein}g</span>
+                  <span>碳水 {aiResult.summary.carbs}g</span>
+                  <span>脂肪 {aiResult.summary.fat}g</span>
+                </div>
+                <div className="ai-food-list">
+                  {aiResult.items.map((item, index) => {
+                    const food = {
+                      ...item,
+                      id: `ai-${Date.now()}-${index}`,
+                      detail: `${item.amount} ${item.unit} · AI 估算`,
+                      tone: 'green',
+                      favorite: false,
+                    };
+                    return (
+                      <div className="ai-food-row" key={food.id}>
+                        <span><strong>{item.name}</strong><small>{food.detail}</small></span>
+                        <span>{Math.round(item.calories)} kcal</span>
+                        <button className="secondary-button" onClick={() => onQuickAdd(food)}><Plus size={16} />记录</button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="ai-disclaimer">{aiResult.disclaimer || 'AI 估算结果请确认后再记录。'}</p>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -1487,13 +1749,41 @@ function OnboardingScreen({
   const autoPlanEligible = age <= ageLimits.autoPlanMax && healthStatus === 'none';
   const setField = (key, value) => setProfile((current) => ({ ...current, [key]: value }));
   const goalLabel = GOAL_OPTIONS.find((option) => option.id === profile.goal)?.summaryLabel;
+  const buildProfilePayload = () => ({
+    userId: `phone-${Date.now()}`,
+    displayName: '新用户',
+    avatarText: '新',
+    goalLabel,
+    units: 'metric',
+    age,
+    sex: profile.sex,
+    heightCm: height,
+    latestWeightKg: currentWeight,
+    targetWeightKg: targetWeight,
+    goal: profile.goal,
+    pace: profile.pace,
+    activity: profile.activity,
+    experience: profile.experience,
+    trainingDays: Number(profile.trainingDays),
+    trainingPlace: profile.trainingPlace,
+    sessionMinutes: Number(profile.sessionMinutes),
+    onboardingCompleted: true,
+  });
 
-  const finishManual = (hasConsent = true) => {
-    setHealthConsent(hasConsent);
-    if (hasConsent && targetInRange) setWeightValue(String(currentWeight));
-    setStep(0);
-    navigate('home');
-    showToast(hasConsent ? '已进入手动记录模式' : '当前仅可浏览公开资料');
+  const finishManual = async (hasConsent = true) => {
+    try {
+      if (hasConsent && dataSource.saveProfile) {
+        await dataSource.saveProfile(buildProfilePayload());
+      }
+      setHealthConsent(hasConsent);
+      if (hasConsent && targetInRange) setWeightValue(String(currentWeight));
+      setStep(0);
+      navigate('home');
+      showToast(hasConsent ? '基础资料已保存，已进入手动记录模式' : '当前仅可浏览公开资料');
+    } catch (error) {
+      setPlanError(error);
+      showToast(error?.message || '基础资料保存失败，请重试');
+    }
   };
 
   const requestPlanPreview = async () => {
@@ -1525,6 +1815,9 @@ function OnboardingScreen({
     setActivationStatus('loading');
     setPlanError(null);
     try {
+      if (dataSource.saveProfile) {
+        await dataSource.saveProfile(buildProfilePayload());
+      }
       const activated = await dataSource.activatePlans({
         suggestionId: plan.suggestionId,
         targets: plan.targets,

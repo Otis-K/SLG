@@ -1,6 +1,7 @@
 import mysql, { type Pool, type RowDataPacket } from 'mysql2/promise';
 import { config } from './config.js';
 import { ensureSchema } from './schema.js';
+import { ensureSeedFoods } from './foodSeeds.js';
 
 export async function createDatabasePool(): Promise<Pool> {
   const admin = await mysql.createConnection({
@@ -29,6 +30,7 @@ export async function createDatabasePool(): Promise<Pool> {
 
   await pool.query('SELECT 1');
   await ensureSchema(pool);
+  await ensureSeedFoods(pool);
   return pool;
 }
 

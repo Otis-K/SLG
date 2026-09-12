@@ -12,10 +12,10 @@ function getRuntimeMode() {
   const queryMode = typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).get('dataSource')
     : null;
-  return queryMode || import.meta.env?.VITE_DATA_SOURCE || 'mock';
+  return queryMode || import.meta.env?.VITE_DATA_SOURCE || 'api';
 }
 
 export const appDataSource = createDataSource({
   mode: getRuntimeMode(),
-  apiBaseUrl: import.meta.env?.VITE_API_BASE_URL || '/api/v1',
+  apiBaseUrl: import.meta.env?.VITE_API_BASE_URL || 'http://127.0.0.1:3000/api/v1',
 });

@@ -1,10 +1,23 @@
-import express, { type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { createDatabasePool, createRequestLog, getDatabaseStatus } from './db.js';
 import { readBootstrapFixture } from './bootstrapData.js';
 import { createPlanSuggestion, createActivationResult } from './plan.js';
+import { toFoodResponse } from './foodSeeds.js';
+import {
+  createAccessToken,
+  createSmsCode,
+  findOrCreateAccountByPhone,
+  getAccountAuthState,
+  maskPhone,
+  verifyAccessToken,
+  verifySmsCode,
+  type AccessTokenPayload,
+} from './auth.js';
+import { estimateMeal } from './ai.js';
+import { HttpError, sendError } from './errors.js';
 import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 
 const app = express();
@@ -14,8 +27,25 @@ app.use(express.json());
 const pool = await createDatabasePool();
 
 type Account = RowDataPacket & { id: string };
+type AuthedRequest = Request & { auth?: AccessTokenPayload };
+
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const header = String(req.headers.authorization ?? '');
+  if (!header.startsWith('Bearer ')) {
+    sendError(res, new HttpError(401, 'UNAUTHENTICATED', '请先登录'));
+    return;
+  }
+  try {
+    (req as AuthedRequest).auth = verifyAccessToken(header.slice(7));
+    next();
+  } catch (error) {
+    sendError(res, error);
+  }
+}
 
 async function accountIdFrom(req: Request): Promise<string> {
+  const authAccount = (req as AuthedRequest).auth?.sub;
+  if (authAccount) return authAccount;
   const provided = String((req.headers['x-account-id'] as string) ?? req.query.accountId ?? 'demo-account-01');
   await pool.execute('INSERT IGNORE INTO accounts (id, status) VALUES (?, ?)', [provided, 'active']);
   return provided;
@@ -54,6 +84,75 @@ app.get('/', (_req: Request, res: Response) => {
   });
 });
 
+app.post('/api/v1/auth/sms-code', async (req: Request, res: Response) => {
+  try {
+    const phone = String(req.body?.phone ?? '');
+    const result = await createSmsCode(pool, phone);
+    if (result.debug) {
+      res.json({
+        data: {
+          phone: maskPhone(phone),
+          expiresAt: result.expiresAt,
+          debug: true,
+          debugCode: result.code,
+          message: '开发模式：验证码直接返回，仅用于本地联调。',
+        },
+      });
+      return;
+    }
+    res.json({
+      data: {
+        phone: maskPhone(phone),
+        expiresAt: result.expiresAt,
+        debug: false,
+        message: '验证码已发送，请在 5 分钟内完成登录。',
+      },
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post('/api/v1/auth/login', async (req: Request, res: Response) => {
+  try {
+    const phone = String(req.body?.phone ?? '');
+    const code = String(req.body?.code ?? '');
+    const verified = await verifySmsCode(pool, phone, code);
+    if (!verified) throw new HttpError(400, 'INVALID_SMS_CODE', '验证码错误或已过期');
+
+    const account = await findOrCreateAccountByPhone(pool, phone);
+    const authState = await getAccountAuthState(pool, account.id);
+    const accessToken = createAccessToken({
+      sub: account.id,
+      phoneHash: account.phone_hash ?? '',
+    });
+    res.json({
+      data: {
+        accessToken,
+        account: {
+          id: account.id,
+          phone: maskPhone(phone),
+          status: account.status,
+        },
+        onboardingCompleted: authState.onboardingCompleted,
+        displayName: authState.displayName,
+      },
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.get('/api/v1/auth/me', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const accountId = await accountIdFrom(req);
+    const authState = await getAccountAuthState(pool, accountId);
+    res.json({ data: { accountId, ...authState } });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 app.get('/health', async (_req: Request, res: Response) => {
   try {
     const database = await getDatabaseStatus(pool);
@@ -63,13 +162,48 @@ app.get('/health', async (_req: Request, res: Response) => {
   }
 });
 
-app.get('/api/v1/app-bootstrap', async (req: Request, res: Response) => {
+app.get('/api/v1/app-bootstrap', requireAuth, async (req: Request, res: Response) => {
   const localDate = typeof req.query.localDate === 'string' ? req.query.localDate : '';
   try {
     await createRequestLog(pool, req.path, localDate);
+    const accountId = await accountIdFrom(req);
+    const authState = await getAccountAuthState(pool, accountId);
     const fixture = readBootstrapFixture();
+    const data = fixture.data as Record<string, any>;
+    const [profileRows] = await pool.query<RowDataPacket[]>('SELECT * FROM profiles WHERE account_id = ?', [accountId]);
+    const profile = profileRows[0];
+    if (profile) {
+      data.profile = {
+        userId: profile.user_id,
+        displayName: profile.display_name,
+        avatarText: profile.avatar_text,
+        goalLabel: profile.goal_label,
+        units: profile.units,
+        latestWeightKg: Number(profile.latest_weight_kg ?? 0),
+        onboardingCompleted: Number(profile.onboarding_completed) === 1,
+      };
+    } else {
+      data.profile = {
+        userId: accountId,
+        displayName: '新用户',
+        avatarText: '新',
+        goalLabel: '',
+        units: 'metric',
+        latestWeightKg: 0,
+        onboardingCompleted: false,
+      };
+      data.meals = { breakfast: [], lunch: [], dinner: [], snack: [] };
+      data.workout = { ...(data.workout ?? {}), sessionId: '', title: '暂无训练', active: false, completed: false, exercises: [] };
+      data.backup = { ...(data.backup ?? {}), state: 'local', lastSuccessfulLabel: '尚未备份' };
+    }
+    data.auth = {
+      accountId,
+      onboardingCompleted: authState.onboardingCompleted,
+      displayName: authState.displayName,
+    };
     res.json({
       ...fixture,
+      data,
       source: 'api',
       requestId: `req-${Date.now()}`,
     });
@@ -82,7 +216,7 @@ app.get('/api/v1/app-bootstrap', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/v1/plan-suggestions', async (req: Request, res: Response) => {
+app.post('/api/v1/plan-suggestions', requireAuth, async (req: Request, res: Response) => {
   try {
     const suggestion = createPlanSuggestion(req.body?.profile ?? {});
     res.json(suggestion);
@@ -91,7 +225,7 @@ app.post('/api/v1/plan-suggestions', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/v1/plans/activate', async (req: Request, res: Response) => {
+app.post('/api/v1/plans/activate', requireAuth, async (req: Request, res: Response) => {
   try {
     const activation = createActivationResult(req.body ?? {});
     const accountId = await accountIdFrom(req);
@@ -106,7 +240,7 @@ app.post('/api/v1/plans/activate', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/v1/profile', async (req: Request, res: Response) => {
+app.get('/api/v1/profile', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const [rows] = await pool.query<RowDataPacket[]>('SELECT * FROM profiles WHERE account_id = ?', [accountId]);
@@ -119,16 +253,16 @@ app.get('/api/v1/profile', async (req: Request, res: Response) => {
   }
 });
 
-app.put('/api/v1/profile', async (req: Request, res: Response) => {
+app.put('/api/v1/profile', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const body = req.body ?? {};
     await pool.execute(
       `INSERT INTO profiles
-        (account_id, user_id, display_name, avatar_text, goal_label, units, age, sex, height_cm, latest_weight_kg, target_weight_kg, goal, pace, activity, experience, training_days, training_place, session_minutes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (account_id, user_id, display_name, avatar_text, goal_label, units, age, sex, height_cm, latest_weight_kg, target_weight_kg, goal, pace, activity, experience, training_days, training_place, session_minutes, onboarding_completed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
-        user_id=VALUES(user_id), display_name=VALUES(display_name), avatar_text=VALUES(avatar_text), goal_label=VALUES(goal_label), units=VALUES(units), age=VALUES(age), sex=VALUES(sex), height_cm=VALUES(height_cm), latest_weight_kg=VALUES(latest_weight_kg), target_weight_kg=VALUES(target_weight_kg), goal=VALUES(goal), pace=VALUES(pace), activity=VALUES(activity), experience=VALUES(experience), training_days=VALUES(training_days), training_place=VALUES(training_place), session_minutes=VALUES(session_minutes)`,
+        user_id=VALUES(user_id), display_name=VALUES(display_name), avatar_text=VALUES(avatar_text), goal_label=VALUES(goal_label), units=VALUES(units), age=VALUES(age), sex=VALUES(sex), height_cm=VALUES(height_cm), latest_weight_kg=VALUES(latest_weight_kg), target_weight_kg=VALUES(target_weight_kg), goal=VALUES(goal), pace=VALUES(pace), activity=VALUES(activity), experience=VALUES(experience), training_days=VALUES(training_days), training_place=VALUES(training_place), session_minutes=VALUES(session_minutes), onboarding_completed=VALUES(onboarding_completed)`,
       [
         accountId,
         body.userId ?? accountId,
@@ -148,6 +282,7 @@ app.put('/api/v1/profile', async (req: Request, res: Response) => {
         body.trainingDays ?? null,
         body.trainingPlace ?? null,
         body.sessionMinutes ?? null,
+        body.onboardingCompleted ? 1 : 0,
       ],
     );
     const [rows] = await pool.query<RowDataPacket[]>('SELECT * FROM profiles WHERE account_id = ?', [accountId]);
@@ -157,48 +292,62 @@ app.put('/api/v1/profile', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/v1/foods/search', async (req: Request, res: Response) => {
+app.get('/api/v1/foods/search', requireAuth, async (req: Request, res: Response) => {
   try {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const accountId = await accountIdFrom(req);
-    const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT id, name, detail, unit, amount, calories, protein, carbs, fat, tone, favorite, is_custom
-       FROM foods
-       WHERE account_id = ? AND (name LIKE ? OR detail LIKE ?)
-       ORDER BY favorite DESC, name ASC
-       LIMIT 50`,
-      [accountId, `%${q}%`, `%${q}%`],
-    );
-    return res.json({ data: stringsToNumbers(rows, ['amount', 'calories', 'protein', 'carbs', 'fat']) });
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 40));
+    const offset = (page - 1) * pageSize;
+    const like = `%${q}%`;
+    const where = `(account_id = ? OR account_id IS NULL) AND (name LIKE ? OR detail LIKE ? OR search_keywords LIKE ?)`;
+    const params = [accountId, like, like, like];
+    const [[countRows], [rows]] = await Promise.all([
+      pool.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM foods WHERE ' + where, params),
+      pool.query<RowDataPacket[]>(
+        'SELECT * FROM foods WHERE ' + where + ' ORDER BY favorite DESC, source ASC, name ASC LIMIT ? OFFSET ?',
+        [...params, pageSize, offset],
+      ),
+    ]);
+    const total = Number(countRows[0]?.total ?? rows.length);
+    return res.json({
+      data: rows.map(toFoodResponse),
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.max(0, Math.ceil(total / pageSize)),
+      },
+    });
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    return sendError(res, error);
   }
 });
 
-app.post('/api/v1/foods', async (req: Request, res: Response) => {
+app.post('/api/v1/foods', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const body = req.body ?? {};
     const id = String(body.id ?? randomUUID());
     await pool.execute(
       `INSERT INTO foods
-        (id, account_id, source, name, detail, unit, amount, calories, protein, carbs, fat, tone, favorite, is_custom)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE name=VALUES(name), detail=VALUES(detail), unit=VALUES(unit), amount=VALUES(amount), calories=VALUES(calories), protein=VALUES(protein), carbs=VALUES(carbs), fat=VALUES(fat), tone=VALUES(tone), favorite=VALUES(favorite), is_custom=VALUES(is_custom)`,
+        (id, account_id, source, name, detail, unit, amount, calories, protein, carbs, fat, image_url, image_emoji, search_keywords, tone, favorite, is_custom)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE name=VALUES(name), detail=VALUES(detail), unit=VALUES(unit), amount=VALUES(amount), calories=VALUES(calories), protein=VALUES(protein), carbs=VALUES(carbs), fat=VALUES(fat), image_url=VALUES(image_url), image_emoji=VALUES(image_emoji), search_keywords=VALUES(search_keywords), tone=VALUES(tone), favorite=VALUES(favorite), is_custom=VALUES(is_custom)`,
       [
         id, accountId, body.source ?? 'custom', body.name ?? '', body.detail ?? '', body.unit ?? '份',
         numberOr(body.amount, 1), numberOr(body.calories, 0), numberOr(body.protein, 0), numberOr(body.carbs, 0), numberOr(body.fat, 0),
-        body.tone ?? 'neutral', body.favorite ? 1 : 0, body.isCustom ? 1 : 0,
+        body.imageUrl ?? null, body.imageEmoji ?? '🍽️', body.searchKeywords ?? '', body.tone ?? 'neutral', body.favorite ? 1 : 0, body.isCustom ? 1 : 0,
       ],
     );
     const [rows] = await pool.query<RowDataPacket[]>('SELECT * FROM foods WHERE id = ?', [id]);
-    return res.status(201).json({ data: rows[0] });
+    return res.status(201).json({ data: toFoodResponse(rows[0]) });
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    return sendError(res, error);
   }
 });
 
-app.get('/api/v1/meal-entries', async (req: Request, res: Response) => {
+app.get('/api/v1/meal-entries', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const localDate = typeof req.query.localDate === 'string' ? req.query.localDate : new Date().toISOString().slice(0, 10);
@@ -212,7 +361,7 @@ app.get('/api/v1/meal-entries', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/v1/meal-entries', async (req: Request, res: Response) => {
+app.post('/api/v1/meal-entries', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const body = req.body ?? {};
@@ -237,7 +386,7 @@ app.post('/api/v1/meal-entries', async (req: Request, res: Response) => {
   }
 });
 
-app.put('/api/v1/meal-entries/:entryId', async (req: Request, res: Response) => {
+app.put('/api/v1/meal-entries/:entryId', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const body = req.body ?? {};
@@ -259,7 +408,7 @@ app.put('/api/v1/meal-entries/:entryId', async (req: Request, res: Response) => 
   }
 });
 
-app.delete('/api/v1/meal-entries/:entryId', async (req: Request, res: Response) => {
+app.delete('/api/v1/meal-entries/:entryId', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const [result] = await pool.execute<ResultSetHeader>(
@@ -272,7 +421,7 @@ app.delete('/api/v1/meal-entries/:entryId', async (req: Request, res: Response) 
   }
 });
 
-app.get('/api/v1/workout-sessions', async (req: Request, res: Response) => {
+app.get('/api/v1/workout-sessions', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const localDate = typeof req.query.localDate === 'string' ? req.query.localDate : new Date().toISOString().slice(0, 10);
@@ -286,7 +435,7 @@ app.get('/api/v1/workout-sessions', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/v1/workout-sessions', async (req: Request, res: Response) => {
+app.post('/api/v1/workout-sessions', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const body = req.body ?? {};
@@ -323,7 +472,7 @@ app.post('/api/v1/workout-sessions', async (req: Request, res: Response) => {
   }
 });
 
-app.patch('/api/v1/workout-sessions/:sessionId/complete', async (req: Request, res: Response) => {
+app.patch('/api/v1/workout-sessions/:sessionId/complete', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     await pool.execute(
@@ -337,7 +486,7 @@ app.patch('/api/v1/workout-sessions/:sessionId/complete', async (req: Request, r
   }
 });
 
-app.get('/api/v1/body-metrics', async (req: Request, res: Response) => {
+app.get('/api/v1/body-metrics', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const [rows] = await pool.query<RowDataPacket[]>(
@@ -350,7 +499,7 @@ app.get('/api/v1/body-metrics', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/v1/body-metrics', async (req: Request, res: Response) => {
+app.post('/api/v1/body-metrics', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const body = req.body ?? {};
@@ -367,7 +516,7 @@ app.post('/api/v1/body-metrics', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/v1/backup-snapshots', async (req: Request, res: Response) => {
+app.post('/api/v1/backup-snapshots', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const body = req.body ?? {};
@@ -390,7 +539,7 @@ app.post('/api/v1/backup-snapshots', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/v1/backup-snapshots/latest', async (req: Request, res: Response) => {
+app.get('/api/v1/backup-snapshots/latest', requireAuth, async (req: Request, res: Response) => {
   try {
     const accountId = await accountIdFrom(req);
     const [rows] = await pool.query<RowDataPacket[]>(
@@ -403,8 +552,30 @@ app.get('/api/v1/backup-snapshots/latest', async (req: Request, res: Response) =
   }
 });
 
+app.post('/api/v1/ai/estimate', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const accountId = await accountIdFrom(req);
+    const result = await estimateMeal(pool, accountId, {
+      text: String(req.body?.text ?? ''),
+      imageBase64: req.body?.imageBase64 ? String(req.body.imageBase64) : undefined,
+    });
+    res.json({ data: result });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 app.use((_req: Request, res: Response) => {
-  res.status(404).json({ error: 'Not Found' });
+  res.status(404).json({
+    error: {
+      code: 'NOT_FOUND',
+      message: '接口不存在',
+    },
+  });
+});
+
+app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  sendError(res, error);
 });
 
 app.listen(config.port, () => {

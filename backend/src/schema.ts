@@ -78,6 +78,9 @@ const statements = [
     protein DECIMAL(12,2) NOT NULL DEFAULT 0,
     carbs DECIMAL(12,2) NOT NULL DEFAULT 0,
     fat DECIMAL(12,2) NOT NULL DEFAULT 0,
+    image_url TEXT NULL,
+    image_emoji VARCHAR(16) NOT NULL DEFAULT '🍽️',
+    search_keywords VARCHAR(255) NOT NULL DEFAULT '',
     tone VARCHAR(16) NOT NULL DEFAULT 'neutral',
     favorite TINYINT(1) NOT NULL DEFAULT 0,
     is_custom TINYINT(1) NOT NULL DEFAULT 0,
@@ -168,10 +171,51 @@ const statements = [
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     finalized_at TIMESTAMP NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS sms_verification_codes (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    recipient VARCHAR(64) NOT NULL,
+    purpose VARCHAR(32) NOT NULL DEFAULT 'login',
+    code_hash CHAR(64) NOT NULL,
+    expires_at DATETIME(3) NOT NULL,
+    consumed_at DATETIME(3) NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_sms_recipient_purpose_created (recipient, purpose, created_at)
+  )`,
+  `CREATE TABLE IF NOT EXISTS ai_estimates (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    account_id CHAR(36) NULL,
+    input_text TEXT NOT NULL,
+    image_sha256 CHAR(64) NULL,
+    provider VARCHAR(32) NOT NULL DEFAULT 'mock',
+    model VARCHAR(64) NOT NULL DEFAULT '',
+    result JSON NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_ai_estimates_account FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL
+  )`,
 ];
 
 export async function ensureSchema(pool: Pool): Promise<void> {
   for (const statement of statements) {
     await pool.query(statement);
+  }
+  await runMigrations(pool);
+}
+
+async function runMigrations(pool: Pool): Promise<void> {
+  const migrations = [
+    `ALTER TABLE accounts ADD UNIQUE KEY uq_accounts_phone_hash (phone_hash)`,
+    `ALTER TABLE profiles ADD COLUMN onboarding_completed TINYINT(1) NOT NULL DEFAULT 0`,
+    `ALTER TABLE foods ADD COLUMN image_url TEXT NULL AFTER fat`,
+    `ALTER TABLE foods ADD COLUMN image_emoji VARCHAR(16) NOT NULL DEFAULT '🍽️' AFTER image_url`,
+    `ALTER TABLE foods ADD COLUMN search_keywords VARCHAR(255) NOT NULL DEFAULT '' AFTER image_emoji`,
+  ];
+
+  for (const migration of migrations) {
+    try {
+      await pool.query(migration);
+    } catch {
+      // Missing columns/indexes are expected on existing databases.
+    }
   }
 }

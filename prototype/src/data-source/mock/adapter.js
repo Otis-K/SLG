@@ -61,10 +61,110 @@ function buildMockPlanResponse(profile) {
 
 export function createMockDataSource({ latencyMs = 90 } = {}) {
   let state = cloneData(MOCK_BOOTSTRAP_RESPONSE);
+  let accessToken = null;
 
   return {
     mode: 'mock',
     label: '模拟后端',
+    getAccessToken: () => accessToken,
+    setAccessToken(token) { accessToken = token || null; },
+    clearAccessToken() { accessToken = null; },
+
+    async requestSmsCode(phone) {
+      await delay(latencyMs);
+      return {
+        phone,
+        debug: true,
+        debugCode: '123456',
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+        message: 'Mock 验证码：123456',
+      };
+    },
+
+    async loginWithCode(_phone, code) {
+      await delay(latencyMs);
+      if (String(code ?? '') !== '123456') {
+        const error = new Error('验证码错误');
+        error.code = 'INVALID_SMS_CODE';
+        throw error;
+      }
+      accessToken = 'mock-access-token';
+      return {
+        accessToken,
+        account: { id: 'mock-account-01', phone: '138****8000', status: 'active' },
+        onboardingCompleted: false,
+        displayName: '新用户',
+      };
+    },
+
+    async saveProfile(profile) {
+      await delay(latencyMs);
+      state.data.profile = {
+        ...state.data.profile,
+        ...profile,
+        onboardingCompleted: true,
+      };
+      return state.data.profile;
+    },
+
+    async searchFoods({ q = '', page = 1, pageSize = 40 } = {}) {
+      await delay(latencyMs);
+      const all = state.data.foodCatalog.slice();
+      const filtered = q.trim()
+        ? all.filter((food) => food.name.toLowerCase().includes(q.trim().toLowerCase()))
+        : all;
+      const start = (page - 1) * pageSize;
+      const data = filtered.slice(start, start + pageSize);
+      return {
+        data,
+        pagination: {
+          page,
+          pageSize,
+          total: filtered.length,
+          totalPages: Math.max(0, Math.ceil(filtered.length / pageSize)),
+        },
+      };
+    },
+
+    async estimateMeal({ text = '' } = {}) {
+      await delay(latencyMs);
+      const calories = /鸡|肉|蛋|鱼/.test(text) ? 380 : 290;
+      const items = [{
+        name: /鸡/.test(text) ? '鸡肉餐' : '家常便餐',
+        unit: '份',
+        amount: 1,
+        calories,
+        protein: Math.round(calories * 0.18 / 4),
+        carbs: Math.round(calories * 0.5 / 4),
+        fat: Math.round(calories * 0.32 / 9),
+        confidence: 0.72,
+      }];
+      return {
+        items,
+        summary: {
+          calories,
+          protein: items[0].protein,
+          carbs: items[0].carbs,
+          fat: items[0].fat,
+        },
+        provider: 'mock',
+        model: 'mock-ai-estimator',
+        disclaimer: 'Mock 模式估算结果，确认后才会记录。',
+      };
+    },
+
+    async createMealEntry(payload) {
+      await delay(latencyMs);
+      const meal = payload.mealId || 'snack';
+      const entry = {
+        ...payload,
+        id: payload.entryId || `meal-${Date.now()}`,
+        entryId: payload.entryId || `meal-${Date.now()}`,
+        tone: payload.tone || 'green',
+      };
+      state.data.meals[meal].push(entry);
+      return entry;
+    },
 
     async loadAppData() {
       await delay(latencyMs);
